@@ -1,147 +1,176 @@
 import { NextRequest, NextResponse } from "next/server";
-import { gameStore, GameRecord } from "@/lib/store";
-import { broadcastGame } from "@/lib/sse";
+import { getServerClient } from "@/lib/supabase";
 import {
     tallyVotes,
     calculateScores,
     buildNewRound,
-    RoundHistory,
     Player,
+    RoundHistory,
 } from "@/lib/gameLogic";
 
 type Params = { params: Promise<{ gameId: string }> };
 
-function broadcast(gameId: string, g: GameRecord) {
-    const { players, ...game } = g;
-    broadcastGame(gameId, { game, players: Object.values(players) });
-}
-
 export async function GET(_req: NextRequest, { params }: Params) {
     const { gameId } = await params;
-    const g = gameStore.get(gameId);
-    if (!g) return NextResponse.json({ error: "not found" }, { status: 404 });
-    const { players, ...game } = g;
-    return NextResponse.json({ game, players: Object.values(players) });
+    const db = getServerClient();
+
+    const [{ data: game }, { data: players }] = await Promise.all([
+        db.from("games").select("*").eq("id", gameId).single(),
+        db.from("players").select("*").eq("game_id", gameId),
+    ]);
+
+    if (!game) return NextResponse.json({ error: "not found" }, { status: 404 });
+    return NextResponse.json({ game: dbToGame(game), players: (players ?? []).map(dbToPlayer) });
 }
 
 export async function POST(req: NextRequest, { params }: Params) {
     const { gameId } = await params;
-    const body = await req.json() as { action: string;[k: string]: unknown };
-    const g = gameStore.get(gameId);
-    if (!g) return NextResponse.json({ error: "not found" }, { status: 404 });
+    const body = await req.json() as { action: string } & Record<string, unknown>;
+    const db = getServerClient();
+
+    const { data: game } = await db.from("games").select("*").eq("id", gameId).single();
+    if (!game) return NextResponse.json({ error: "not found" }, { status: 404 });
+
+    const { data: playerRows } = await db.from("players").select("*").eq("game_id", gameId);
+    const players: Player[] = (playerRows ?? []).map(dbToPlayer);
 
     switch (body.action) {
-        // ── join ──────────────────────────────────────────
+
         case "join": {
             const { playerId, playerName } = body as unknown as { playerId: string; playerName: string };
-            g.players[playerId] = {
-                id: playerId,
-                name: playerName,
-                score: 0,
-                isReady: false,
-                hasVoted: false,
-                isHost: false,
-                votedFor: null,
-                isEliminated: false,
-            };
-            broadcast(gameId, g);
-            return NextResponse.json({ ok: true });
-        }
-
-        // ── start ─────────────────────────────────────────
-        case "start": {
-            const playerIds = Object.keys(g.players);
-            const { word, category, imposters, imposterHint } = buildNewRound(g.settings, playerIds);
-            Object.values(g.players).forEach((p) => {
-                p.isReady = false; p.hasVoted = false; p.votedFor = null;
+            await db.from("players").insert({
+                id: playerId, game_id: gameId, name: playerName,
+                score: 0, is_ready: false, has_voted: false, is_host: false, voted_for: null, is_eliminated: false,
             });
-            Object.assign(g, { phase: "reveal", word, category, imposters, imposterHint, currentRound: 1, votes: {} });
-            broadcast(gameId, g);
             return NextResponse.json({ ok: true });
         }
 
-        // ── ready ─────────────────────────────────────────
+        case "start": {
+            const playerIds = players.map((p) => p.id);
+            const { word, category, imposters, imposterHint } = buildNewRound(game.settings, playerIds);
+            await db.from("games").update({
+                phase: "reveal", word, category, imposters, imposter_hint: imposterHint,
+                current_round: 1, votes: {},
+            }).eq("id", gameId);
+            await db.from("players").update({ is_ready: false, has_voted: false, voted_for: null }).eq("game_id", gameId);
+            return NextResponse.json({ ok: true });
+        }
+
         case "ready": {
             const { playerId } = body as unknown as { playerId: string };
-            if (g.players[playerId]) g.players[playerId].isReady = true;
-            const allReady = Object.values(g.players).every((p) => p.isReady);
-            if (allReady) Object.assign(g, { phase: "discuss", timerStart: Date.now() });
-            broadcast(gameId, g);
+            await db.from("players").update({ is_ready: true }).eq("id", playerId).eq("game_id", gameId);
+            // Check if all ready
+            const { data: updated } = await db.from("players").select("is_ready").eq("game_id", gameId);
+            const allReady = (updated ?? []).every((p: { is_ready: boolean }) => p.is_ready);
+            if (allReady) {
+                await db.from("games").update({ phase: "discuss", timer_start: Date.now() }).eq("id", gameId);
+            }
             return NextResponse.json({ ok: true });
         }
 
-        // ── startVoting ───────────────────────────────────
         case "startVoting": {
-            Object.values(g.players).forEach((p) => { p.hasVoted = false; p.votedFor = null; });
-            Object.assign(g, { phase: "vote", votes: {} });
-            broadcast(gameId, g);
+            await db.from("players").update({ has_voted: false, voted_for: null }).eq("game_id", gameId);
+            await db.from("games").update({ phase: "vote", votes: {} }).eq("id", gameId);
             return NextResponse.json({ ok: true });
         }
 
-        // ── vote ──────────────────────────────────────────
         case "vote": {
             const { playerId, targetId } = body as unknown as { playerId: string; targetId: string };
-            if (g.players[playerId]) { g.players[playerId].hasVoted = true; g.players[playerId].votedFor = targetId; }
-            g.votes[playerId] = targetId;
-            const allVoted = Object.values(g.players).every((p) => p.hasVoted);
+            await db.from("players").update({ has_voted: true, voted_for: targetId }).eq("id", playerId).eq("game_id", gameId);
+            const newVotes = { ...(game.votes ?? {}), [playerId]: targetId };
+            await db.from("games").update({ votes: newVotes }).eq("id", gameId);
+
+            // Check if all voted
+            const { data: updatedPlayers } = await db.from("players").select("*").eq("game_id", gameId);
+            const allVoted = (updatedPlayers ?? []).every((p: { has_voted: boolean }) => p.has_voted);
             if (allVoted) {
-                const players = Object.values(g.players);
-                const { votedOut, wasSkip } = tallyVotes(g.votes, players);
-                const deltas = calculateScores(players, g.imposters, votedOut, wasSkip);
-                Object.values(g.players).forEach((p) => { p.score += deltas[p.id] || 0; });
+                const allP: Player[] = (updatedPlayers ?? []).map(dbToPlayer);
+                const { votedOut, wasSkip } = tallyVotes(newVotes, allP);
+                const deltas = calculateScores(allP, game.imposters, votedOut, wasSkip);
+                // Update scores
+                for (const p of allP) {
+                    const delta = deltas[p.id] || 0;
+                    if (delta) await db.from("players").update({ score: p.score + delta }).eq("id", p.id).eq("game_id", gameId);
+                }
                 const history: RoundHistory = {
-                    round: g.currentRound,
-                    word: g.word,
-                    category: g.category,
-                    imposters: g.imposters,
-                    votedOut,
-                    wasCorrect: g.imposters.includes(votedOut),
+                    round: game.current_round, word: game.word, category: game.category,
+                    imposters: game.imposters, votedOut, wasCorrect: game.imposters.includes(votedOut),
                 };
-                Object.assign(g, {
+                await db.from("games").update({
                     phase: "result",
-                    roundHistory: [...g.roundHistory, history],
-                    lastVotedOut: votedOut,
-                    lastWasSkip: wasSkip,
-                });
+                    round_history: [...(game.round_history ?? []), history],
+                    last_voted_out: votedOut,
+                    last_was_skip: wasSkip,
+                }).eq("id", gameId);
             }
-            broadcast(gameId, g);
             return NextResponse.json({ ok: true });
         }
 
-        // ── nextRound ─────────────────────────────────────
         case "nextRound": {
-            const isLast = g.currentRound >= g.settings.totalRounds;
+            const isLast = game.current_round >= game.settings.totalRounds;
             if (isLast) {
-                g.phase = "scores";
+                await db.from("games").update({ phase: "scores" }).eq("id", gameId);
             } else {
-                const playerIds = Object.keys(g.players);
-                const { word, category, imposters, imposterHint } = buildNewRound(g.settings, playerIds);
-                Object.values(g.players).forEach((p) => { p.isReady = false; p.hasVoted = false; p.votedFor = null; });
-                Object.assign(g, {
-                    phase: "reveal", word, category, imposters, imposterHint,
-                    currentRound: g.currentRound + 1, votes: {},
-                });
+                const playerIds = players.map((p) => p.id);
+                const { word, category, imposters, imposterHint } = buildNewRound(game.settings, playerIds);
+                await db.from("games").update({
+                    phase: "reveal", word, category, imposters, imposter_hint: imposterHint,
+                    current_round: game.current_round + 1, votes: {},
+                }).eq("id", gameId);
+                await db.from("players").update({ is_ready: false, has_voted: false, voted_for: null }).eq("game_id", gameId);
             }
-            broadcast(gameId, g);
             return NextResponse.json({ ok: true });
         }
 
-        // ── playAgain ─────────────────────────────────────
         case "playAgain": {
-            Object.values(g.players).forEach((p) => { p.score = 0; p.isReady = false; p.hasVoted = false; p.votedFor = null; });
-            Object.assign(g, { phase: "lobby", currentRound: 1, word: "", category: "", imposters: [], votes: {}, roundHistory: [], timerStart: null });
-            broadcast(gameId, g);
+            await db.from("players").update({ score: 0, is_ready: false, has_voted: false, voted_for: null }).eq("game_id", gameId);
+            await db.from("games").update({
+                phase: "lobby", current_round: 1, word: "", category: "",
+                imposters: [], votes: {}, round_history: [], timer_start: null,
+            }).eq("id", gameId);
             return NextResponse.json({ ok: true });
         }
 
-        // ── endGame ───────────────────────────────────────
         case "endGame": {
-            g.phase = "ended";
-            broadcast(gameId, g);
+            await db.from("games").update({ phase: "ended" }).eq("id", gameId);
             return NextResponse.json({ ok: true });
         }
 
         default:
             return NextResponse.json({ error: "unknown action" }, { status: 400 });
     }
+}
+
+// DB row → app types
+function dbToGame(row: Record<string, unknown>) {
+    return {
+        id: row.id,
+        roomCode: row.room_code,
+        hostId: row.host_id,
+        phase: row.phase,
+        settings: row.settings,
+        currentRound: row.current_round,
+        word: row.word,
+        category: row.category,
+        imposters: row.imposters,
+        imposterHint: row.imposter_hint,
+        votes: row.votes,
+        roundHistory: row.round_history,
+        timerStart: row.timer_start,
+        lastVotedOut: row.last_voted_out,
+        lastWasSkip: row.last_was_skip,
+    };
+}
+
+function dbToPlayer(row: Record<string, unknown>): Player {
+    return {
+        id: row.id as string,
+        name: row.name as string,
+        score: row.score as number,
+        isReady: row.is_ready as boolean,
+        hasVoted: row.has_voted as boolean,
+        isHost: row.is_host as boolean,
+        votedFor: row.voted_for as string | null,
+        isEliminated: row.is_eliminated as boolean,
+    };
 }
