@@ -12,8 +12,11 @@ export default function DiscussPage() {
     const router = useRouter();
     const { game, players } = useGame(gameId);
     const { playerId } = useLocalPlayer();
-    const isHost = game?.hostId === playerId;
+    const [mounted, setMounted] = useState(false);
     const [timeLeft, setTimeLeft] = useState<number | null>(null);
+
+    useEffect(() => { setMounted(true); }, []);
+    const isHost = mounted && game?.hostId === playerId;
     const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
     useEffect(() => {

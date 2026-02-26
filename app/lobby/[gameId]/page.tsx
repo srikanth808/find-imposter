@@ -1,7 +1,7 @@
 "use client";
 import { motion, AnimatePresence } from "framer-motion";
 import { useRouter, useParams } from "next/navigation";
-import { useEffect } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useGame } from "@/hooks/useGame";
 import { useLocalPlayer } from "@/lib/gameStore";
 import { apiAction } from "@/lib/api";
@@ -12,16 +12,44 @@ export default function LobbyPage() {
     const router = useRouter();
     const { game, players, loading } = useGame(gameId);
     const { playerId } = useLocalPlayer();
+    const [mounted, setMounted] = useState(false);
+    const [copied, setCopied] = useState(false);
+    const [joinToast, setJoinToast] = useState<string | null>(null);
+    const prevCountRef = useRef(0);
 
-    const isHost = game?.hostId === playerId;
+    useEffect(() => { setMounted(true); }, []);
+
+    const isHost = mounted && game?.hostId === playerId;
+    const minPlayers = game?.settings?.minPlayers ?? 2;
+    const canStart = players.length >= minPlayers;
+
+    // Detect new player joins and show toast
+    useEffect(() => {
+        if (players.length > prevCountRef.current && prevCountRef.current > 0) {
+            const newPlayer = players[players.length - 1];
+            if (newPlayer && newPlayer.id !== playerId) {
+                setJoinToast(`${newPlayer.name} joined!`);
+                setTimeout(() => setJoinToast(null), 3000);
+            }
+        }
+        prevCountRef.current = players.length;
+    }, [players, playerId]);
 
     useEffect(() => {
         if (game?.phase === "reveal") router.push(`/game/${gameId}/reveal`);
     }, [game?.phase, gameId, router]);
 
     async function startGame() {
-        if (players.length < 3) return;
+        if (!canStart) return;
         await apiAction(gameId, "start");
+    }
+
+    function copyShareLink() {
+        const joinUrl = `${window.location.origin}/join?code=${game?.roomCode}`;
+        navigator.clipboard.writeText(joinUrl).then(() => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 2500);
+        });
     }
 
     if (loading) return <LoadingScreen />;
@@ -35,6 +63,19 @@ export default function LobbyPage() {
                     <p className="text-xs text-cyan-400 font-orbitron tracking-widest mb-2">ROOM CODE</p>
                     <div className="room-code">{game?.roomCode}</div>
                     <p className="text-white/40 text-xs mt-2">Share this with friends to join on their phones</p>
+
+                    {/* Share link button */}
+                    <motion.button
+                        onClick={copyShareLink}
+                        className="mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold transition-all border"
+                        style={{
+                            background: copied ? "rgba(52,211,153,0.15)" : "rgba(255,255,255,0.05)",
+                            borderColor: copied ? "rgba(52,211,153,0.4)" : "rgba(255,255,255,0.1)",
+                            color: copied ? "#6ee7b7" : "rgba(255,255,255,0.5)",
+                        }}
+                        whileTap={{ scale: 0.95 }}>
+                        {copied ? "✅ Link Copied!" : "🔗 Copy Invite Link"}
+                    </motion.button>
                 </div>
 
                 {/* Settings badges */}
@@ -74,14 +115,16 @@ export default function LobbyPage() {
                         </AnimatePresence>
                     </div>
 
-                    {players.length < 3 && (
-                        <p className="text-white/30 text-xs text-center mt-4">Need at least 3 players to start</p>
+                    {!canStart && (
+                        <p className="text-white/30 text-xs text-center mt-4">
+                            Need at least {minPlayers} players to start ({players.length}/{minPlayers})
+                        </p>
                     )}
                 </div>
 
                 {isHost ? (
-                    <button className="btn-primary w-full text-lg" onClick={startGame} disabled={players.length < 3}>
-                        {players.length < 3 ? `Waiting for players... (${players.length}/3)` : "🚀 Start Game!"}
+                    <button className="btn-primary w-full text-lg" onClick={startGame} disabled={!canStart}>
+                        {!canStart ? `Waiting for players... (${players.length}/${minPlayers})` : "🚀 Start Game!"}
                     </button>
                 ) : (
                     <div className="glass-card p-5 text-center">
@@ -91,6 +134,20 @@ export default function LobbyPage() {
                     </div>
                 )}
             </motion.div>
+
+            {/* Join toast notification */}
+            <AnimatePresence>
+                {joinToast && (
+                    <motion.div
+                        className="fixed bottom-6 left-1/2 -translate-x-1/2 px-5 py-3 rounded-2xl text-sm font-semibold text-white shadow-2xl z-50 flex items-center gap-2"
+                        style={{ background: "linear-gradient(135deg, rgba(124,58,237,0.9), rgba(6,182,212,0.7))", backdropFilter: "blur(12px)", border: "1px solid rgba(255,255,255,0.15)" }}
+                        initial={{ opacity: 0, y: 30, scale: 0.9 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: 20, scale: 0.9 }}>
+                        <span>👋</span> {joinToast}
+                    </motion.div>
+                )}
+            </AnimatePresence>
         </main>
     );
 }
@@ -102,3 +159,4 @@ function LoadingScreen() {
         </div>
     );
 }
+

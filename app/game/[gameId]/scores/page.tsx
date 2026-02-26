@@ -1,7 +1,7 @@
 "use client";
 import { motion } from "framer-motion";
 import { useRouter, useParams } from "next/navigation";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useGame } from "@/hooks/useGame";
 import { useLocalPlayer } from "@/lib/gameStore";
 import { apiAction } from "@/lib/api";
@@ -13,8 +13,11 @@ export default function ScoresPage() {
     const router = useRouter();
     const { game, players } = useGame(gameId);
     const { playerId } = useLocalPlayer();
-    const isHost = game?.hostId === playerId;
+    const [mounted, setMounted] = useState(false);
     const confettiFired = useRef(false);
+
+    useEffect(() => { setMounted(true); }, []);
+    const isHost = mounted && game?.hostId === playerId;
 
     const sorted = [...players].sort((a, b) => b.score - a.score);
     const winner = sorted[0];

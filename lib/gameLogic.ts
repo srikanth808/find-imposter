@@ -18,6 +18,7 @@ export interface GameSettings {
     totalRounds: number;
     timerMode: boolean;
     timerDuration: number; // seconds
+    minPlayers: number; // minimum players required to start
 }
 
 export interface RoundHistory {
