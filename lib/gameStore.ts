@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { persist } from "zustand/middleware";
 import { GameState, Player } from "./gameLogic";
 
 interface LocalPlayerState {
@@ -10,29 +11,18 @@ interface LocalPlayerState {
     clear: () => void;
 }
 
-export const useLocalPlayer = create<LocalPlayerState>((set) => ({
-    playerId: typeof window !== "undefined" ? localStorage.getItem("playerId") : null,
-    playerName: typeof window !== "undefined" ? localStorage.getItem("playerName") : null,
-    gameId: typeof window !== "undefined" ? localStorage.getItem("gameId") : null,
-    setPlayer: (id, name) => {
-        if (typeof window !== "undefined") {
-            localStorage.setItem("playerId", id);
-            localStorage.setItem("playerName", name);
+export const useLocalPlayer = create<LocalPlayerState>()(
+    persist(
+        (set) => ({
+            playerId: null,
+            playerName: null,
+            gameId: null,
+            setPlayer: (id, name) => set({ playerId: id, playerName: name }),
+            setGameId: (id) => set({ gameId: id }),
+            clear: () => set({ playerId: null, playerName: null, gameId: null }),
+        }),
+        {
+            name: "find-imposter-storage",
         }
-        set({ playerId: id, playerName: name });
-    },
-    setGameId: (id) => {
-        if (typeof window !== "undefined") {
-            localStorage.setItem("gameId", id);
-        }
-        set({ gameId: id });
-    },
-    clear: () => {
-        if (typeof window !== "undefined") {
-            localStorage.removeItem("playerId");
-            localStorage.removeItem("playerName");
-            localStorage.removeItem("gameId");
-        }
-        set({ playerId: null, playerName: null, gameId: null });
-    },
-}));
+    )
+);
