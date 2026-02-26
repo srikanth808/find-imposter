@@ -141,21 +141,6 @@ export default function CreatePage() {
                         </div>
                     </div>
 
-                    {/* Min Players */}
-                    <div className="mb-6">
-                        <label className="block text-sm text-purple-300 mb-2 font-semibold">Min Players to Start</label>
-                        <div className="flex gap-2">
-                            {[2, 3, 4, 5].map((n) => (
-                                <button key={n} onClick={() => setSettings((s) => ({ ...s, minPlayers: n }))}
-                                    className={`flex-1 py-3 rounded-xl border text-sm font-bold transition-all ${settings.minPlayers === n
-                                        ? "border-cyan-500 bg-cyan-500/20 text-cyan-300"
-                                        : "border-white/10 bg-white/5 text-white/50 hover:border-white/20"}`}>
-                                    {n}
-                                </button>
-                            ))}
-                        </div>
-                        <p className="text-white/30 text-xs mt-2">Game won&apos;t start until this many players have joined</p>
-                    </div>
 
                     {/* Timer */}
                     <div className="mb-8">

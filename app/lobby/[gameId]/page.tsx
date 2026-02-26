@@ -20,8 +20,7 @@ export default function LobbyPage() {
     useEffect(() => { setMounted(true); }, []);
 
     const isHost = mounted && game?.hostId === playerId;
-    const minPlayers = game?.settings?.minPlayers ?? 2;
-    const canStart = players.length >= minPlayers;
+    const canStart = players.length >= 2;
 
     // Detect new player joins and show toast
     useEffect(() => {
@@ -115,16 +114,20 @@ export default function LobbyPage() {
                         </AnimatePresence>
                     </div>
 
-                    {!canStart && (
+                    {!canStart ? (
                         <p className="text-white/30 text-xs text-center mt-4">
-                            Need at least {minPlayers} players to start ({players.length}/{minPlayers})
+                            Waiting for at least 2 players to join...
+                        </p>
+                    ) : (
+                        <p className="text-cyan-400 text-xs text-center mt-4 font-semibold animate-pulse">
+                            Ready to start!
                         </p>
                     )}
                 </div>
 
                 {isHost ? (
-                    <button className="btn-primary w-full text-lg" onClick={startGame} disabled={!canStart}>
-                        {!canStart ? `Waiting for players... (${players.length}/${minPlayers})` : "🚀 Start Game!"}
+                    <button className="btn-primary w-full text-lg transition-all" onClick={startGame} disabled={!canStart}>
+                        {!canStart ? "Need 2+ players" : "🚀 Start Game!"}
                     </button>
                 ) : (
                     <div className="glass-card p-5 text-center">
