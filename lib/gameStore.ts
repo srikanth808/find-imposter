@@ -14,9 +14,9 @@ interface LocalPlayerState {
 export const useLocalPlayer = create<LocalPlayerState>()(
     persist(
         (set) => ({
-            playerId: null,
-            playerName: null,
-            gameId: null,
+            playerId: typeof window !== "undefined" ? localStorage.getItem("playerId") : null,
+            playerName: typeof window !== "undefined" ? localStorage.getItem("playerName") : null,
+            gameId: typeof window !== "undefined" ? localStorage.getItem("gameId") : null,
             setPlayer: (id, name) => set({ playerId: id, playerName: name }),
             setGameId: (id) => set({ gameId: id }),
             clear: () => set({ playerId: null, playerName: null, gameId: null }),

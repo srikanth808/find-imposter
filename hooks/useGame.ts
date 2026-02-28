@@ -44,6 +44,8 @@ export function useGame(gameId: string | null) {
     useEffect(() => {
         if (!gameId) return;
 
+        let interval: ReturnType<typeof setInterval>;
+
         // Initial fetch
         async function fetchAll() {
             const [{ data: g }, { data: p }] = await Promise.all([
@@ -55,6 +57,9 @@ export function useGame(gameId: string | null) {
             setLoading(false);
         }
         fetchAll();
+
+        // Polling fallback (runs every 2.5s) in case Supabase Realtime isn't enabled in the dashboard
+        interval = setInterval(fetchAll, 2500);
 
         // Real-time subscription — Supabase pushes any DB change instantly
         const channel = supabase
@@ -71,7 +76,10 @@ export function useGame(gameId: string | null) {
                 })
             .subscribe();
 
-        return () => { supabase.removeChannel(channel); };
+        return () => {
+            supabase.removeChannel(channel);
+            clearInterval(interval);
+        };
     }, [gameId]);
 
     return { game, players, loading };
